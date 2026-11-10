@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GBM Monte Carlo Observatory (C engine)</title>
+<style>
+:root{--bg:#050d24;--pn:#0b1a40;--ink:#e8eeff;--mut:#8fa3d6;--a:#5b8cff;--b:#2de2c8;--c:#ff5c93;--grid:#1c2d63}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;color:var(--ink);background:radial-gradient(900px 500px at 12% -10%,rgba(91,140,255,.3),transparent),radial-gradient(800px 500px at 100% 0,rgba(255,92,147,.2),transparent),var(--bg)}
+.wrap{max-width:1100px;margin:0 auto;padding:22px 16px 40px}
+h1{font-size:clamp(28px,5.5vw,46px);margin:0;letter-spacing:-.02em;line-height:1.1;background:linear-gradient(90deg,var(--a),var(--b) 55%,var(--c));-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{color:var(--mut);margin:8px 0 14px}
+.chip{display:inline-block;font-size:12px;border:1px solid var(--grid);border-radius:999px;padding:3px 12px;color:var(--mut);margin-bottom:14px}
+.chip i{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--c);margin-right:6px}
+.chip.on i{background:var(--b);box-shadow:0 0 8px var(--b)}
+.panel{background:rgba(11,26,64,.86);border:1px solid var(--grid);border-radius:18px;padding:14px;margin-bottom:16px;box-shadow:0 14px 40px -24px var(--a)}
+h2{font-size:12px;letter-spacing:.09em;text-transform:uppercase;color:var(--mut);margin:0 0 8px;font-weight:600}
+.ctl{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px 20px}
+label{font-size:12px;color:var(--mut);display:block}label b{float:right;color:var(--ink)}
+input[type=range]{width:100%;accent-color:var(--a)}
+button{cursor:pointer;border:0;border-radius:999px;padding:9px 18px;font:600 13px system-ui;color:#041030;background:linear-gradient(90deg,var(--a),var(--b));margin-top:14px}
+canvas{width:100%;display:block}
+#c1{height:380px}#c2,#c3{height:270px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.card{border:1px solid var(--grid);border-radius:14px;padding:10px 12px}
+.card small{color:var(--mut);display:block;font-size:11px;text-transform:uppercase;letter-spacing:.06em}
+.card strong{font-size:23px;display:block}.card span{font-size:12px;color:var(--mut)}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:760px){.two{grid-template-columns:1fr}#c1{height:300px}}
+footer{color:var(--mut);font-size:12px;text-align:center;margin-top:18px}
+</style></head><body><div class="wrap">
+<h1>GBM Monte Carlo Observatory</h1>
+<p class="sub">Every number on this page is computed live by your <b>C program</b>. The browser only draws it.</p>
+<span class="chip" id="chip"><i></i><span id="chipt">connecting to C engine…</span></span>
+
+<div class="panel"><div class="ctl">
+<label>Expected return μ <b id="vmu"></b><input id="mu" type="range" min="-10" max="40" value="10"></label>
+<label>Volatility σ <b id="vsg"></b><input id="sg" type="range" min="5" max="80" value="20"></label>
+<label>Horizon T <b id="vT"></b><input id="T" type="range" min="0.25" max="3" step="0.25" value="1"></label>
+<label>Paths N <b id="vN"></b><input id="N" type="range" min="200" max="10000" step="200" value="3000"></label>
+<label>Option strike K <b id="vK"></b><input id="K" type="range" min="60" max="150" value="105"></label>
+</div><button id="go">▶ Replay with a new random future</button></div>
+
+<div class="panel"><h2>The fan of possible futures</h2><canvas id="c1"></canvas></div>
+<div class="panel"><h2>What the C engine says</h2><div class="cards" id="stats"></div></div>
+<div class="two">
+<div class="panel"><h2>Where prices land at time T</h2><canvas id="c2"></canvas></div>
+<div class="panel"><h2>Monte Carlo converging on Black-Scholes</h2><canvas id="c3"></canvas></div>
+</div>
+<div class="panel"><h2>Option pricing (risk-neutral, r = 5%)</h2><div class="cards" id="opts"></div></div>
+<footer id="foot">gbm_server.c computes · index.html draws</footer>
+</div>
+<script>
+const $=i=>document.getElementById(i),n=120,S0=100;
+let D=null,mu,sg,T,N,K,sd=1,raf=0,t0=0,busy=false,again=false,anim=false;
+const Phi=x=>{const s=Math.sign(x);x=Math.abs(x)/Math.SQRT2;const t=1/(1+.3275911*x);return .5*(1+s*(1-(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-.284496736)*t+.254829592)*t*Math.exp(-x*x)))};
+function cv(id){const c=$(id),d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=Math.round(w*d);c.height=Math.round(h*d);const x=c.getContext('2d');x.setTransform(d,0,0,d,0,0);x.font='11px system-ui';return[x,w,h]}
+function band(x,X,Y,k,a,b,al){x.globalAlpha=al;x.fillStyle='#5b8cff';x.beginPath();for(let j=0;j<=k;j++)x[j?'lineTo':'moveTo'](X(j),Y(D.bands[j][b]));for(let j=k;j>=0;j--)x.lineTo(X(j),Y(D.bands[j][a]));x.fill();x.globalAlpha=1}
+function dMain(p){const[x,w,h]=cv('c1'),B=D.bands,L=44,Bt=26,Tp=10,Rr=14,lo=Math.min(...B.map(b=>b[0]))*.88,hi=Math.max(...B.map(b=>b[4]))*1.1,X=j=>L+j/n*(w-L-Rr),Y=v=>Tp+(1-(v-lo)/(hi-lo))*(h-Tp-Bt),k=Math.floor(p*n);
+x.fillStyle='#8fa3d6';x.strokeStyle='#1c2d63';x.lineWidth=1;
+for(let g=0;g<=4;g++){const v=lo+(hi-lo)*g/4,y=Y(v);x.beginPath();x.moveTo(L,y);x.lineTo(w-Rr,y);x.stroke();x.fillText(v.toFixed(0),6,y+4)}
+for(let g=0;g<=4;g++)x.fillText((T*g/4).toFixed(2)+'y',X(n*g/4)-12,h-8);
+x.save();x.beginPath();x.rect(L,Tp,w-L-Rr,h-Tp-Bt);x.clip();
+band(x,X,Y,k,0,4,.13);band(x,X,Y,k,1,3,.24);
+for(const pa of D.paths){const e=pa[n]>=S0?'#2de2c8':'#ff5c93';x.strokeStyle=e;x.globalAlpha=.4;x.beginPath();for(let j=0;j<=k;j++)x[j?'lineTo':'moveTo'](X(j),Y(pa[j]));x.stroke();x.globalAlpha=.95;x.fillStyle=e;x.beginPath();x.arc(X(k),Y(pa[k]),1.9,0,7);x.fill()}
+x.globalAlpha=1;x.strokeStyle='#e8eeff';x.lineWidth=2.2;x.beginPath();for(let j=0;j<=k;j++)x[j?'lineTo':'moveTo'](X(j),Y(B[j][2]));x.stroke();
+x.setLineDash([6,5]);x.strokeStyle='#2de2c8';x.lineWidth=1.8;x.beginPath();for(let j=0;j<=k;j++)x[j?'lineTo':'moveTo'](X(j),Y(S0*Math.exp(mu*T*j/n)));x.stroke();x.setLineDash([]);x.restore()}
+function dHist(p){const[x,w,h]=cv('c2'),B=24,H=D.hist,nb=H.c.length,lo=H.lo,hi=H.hi,bw=(hi-lo)/nb,m=Math.log(S0)+(mu-.5*sg*sg)*T,s=sg*Math.sqrt(T),e=Math.min(1,p*1.5);
+const pdf=v=>Math.exp(-((Math.log(v)-m)**2)/(2*s*s))/(v*s*Math.sqrt(2*Math.PI))*bw*N,mx=Math.max(...H.c)*1.18,X=v=>10+(v-lo)/(hi-lo)*(w-20),Y=k=>h-B-k/mx*(h-B-14)*e;
+const g=x.createLinearGradient(0,h-B,0,14);g.addColorStop(0,'#5b8cff');g.addColorStop(1,'#2de2c8');x.fillStyle=g;x.globalAlpha=.85;
+for(let b=0;b<nb;b++)x.fillRect(X(lo+b*bw)+1,Y(H.c[b]),(w-20)/nb-2,h-B-Y(H.c[b]));x.globalAlpha=1;
+x.save();x.shadowColor='#ff5c93';x.shadowBlur=12;x.strokeStyle='#ff5c93';x.lineWidth=2.6;x.beginPath();for(let i=0;i<=120;i++){const v=lo+(hi-lo)*i/120;x[i?'lineTo':'moveTo'](X(v),Y(pdf(v)))}x.stroke();x.restore();
+const v5=D.st.q05;x.setLineDash([5,4]);x.strokeStyle='#ff5c93';x.lineWidth=1.5;x.beginPath();x.moveTo(X(v5),12);x.lineTo(X(v5),h-B);x.stroke();x.setLineDash([]);x.fillStyle='#ff5c93';x.fillText('VaR95 '+(S0-v5).toFixed(1),X(v5)+4,22);
+x.fillStyle='#8fa3d6';for(let i=0;i<=5;i++){const v=lo+(hi-lo)*i/5;x.fillText(v.toFixed(0),X(v)-8,h-8)}}
+function dConv(p){const[x,w,h]=cv('c3'),cs=D.conv,L=44,Bt=26,Tp=10,Rr=14,b=D.opt.bc,r=Math.max(1.2,b*.6),lo=b-r,hi=b+r,X=v=>L+(Math.log10(v)-1)/4*(w-L-Rr),Y=v=>Tp+(1-(v-lo)/(hi-lo))*(h-Tp-Bt),k=Math.max(1,Math.ceil(p*cs.length));
+x.fillStyle='#8fa3d6';x.strokeStyle='#1c2d63';x.lineWidth=1;
+for(let g=0;g<=4;g++){const v=lo+(hi-lo)*g/4,y=Y(v);x.beginPath();x.moveTo(L,y);x.lineTo(w-Rr,y);x.stroke();x.fillText(v.toFixed(1),6,y+4)}
+for(let e=1;e<=5;e++)x.fillText('10^'+e,X(10**e)-10,h-8);
+x.save();x.beginPath();x.rect(L,Tp,w-L-Rr,h-Tp-Bt);x.clip();
+x.globalAlpha=.2;x.fillStyle='#5b8cff';x.beginPath();for(let i=0;i<k;i++)x[i?'lineTo':'moveTo'](X(cs[i][0]),Y(cs[i][1]+1.96*cs[i][2]));for(let i=k-1;i>=0;i--)x.lineTo(X(cs[i][0]),Y(cs[i][1]-1.96*cs[i][2]));x.fill();x.globalAlpha=1;
+x.strokeStyle='#5b8cff';x.lineWidth=2.4;x.beginPath();for(let i=0;i<k;i++)x[i?'lineTo':'moveTo'](X(cs[i][0]),Y(cs[i][1]));x.stroke();
+x.setLineDash([6,5]);x.strokeStyle='#2de2c8';x.lineWidth=2;x.beginPath();x.moveTo(L,Y(b));x.lineTo(w-Rr,Y(b));x.stroke();x.setLineDash([]);x.restore();
+x.fillStyle='#2de2c8';x.fillText('Black-Scholes '+b.toFixed(3),L+8,Y(b)-6)}
+const card=(t,v,s,c)=>`<div class="card"><small>${t}</small><strong${c?` style="color:var(--${c})"`:''}>${v}</strong><span>${s}</span></div>`;
+function cards(){const s=D.st,o=D.opt,th=S0*Math.exp(mu*T),ts=th*Math.sqrt(Math.exp(sg*sg*T)-1),pu=Phi((mu-.5*sg*sg)*Math.sqrt(T)/sg);
+$('stats').innerHTML=card('Mean price',s.mean.toFixed(2),'theory '+th.toFixed(2),'a')+card('Std deviation',s.sd.toFixed(2),'theory '+ts.toFixed(2))+card('Chance of profit',(100*s.up).toFixed(1)+'%','theory '+(100*pu).toFixed(1)+'%','b')+card('95% Value-at-Risk',(S0-s.q05).toFixed(2),'loss exceeded only 5% of the time','c')+card('Expected shortfall',s.es.toFixed(2),'average loss in the worst 5%','c');
+$('opts').innerHTML=card('Call (Monte Carlo)',o.c.toFixed(3),'± '+(1.96*o.se).toFixed(3)+' (95% CI)','a')+card('Call (Black-Scholes)',o.bc.toFixed(3),'error '+Math.abs(o.c-o.bc).toFixed(3),'b')+card('Put (Monte Carlo)',o.p.toFixed(3),'Black-Scholes '+o.bp.toFixed(3),'a')+card('Put-call parity',(o.c-o.p).toFixed(3),'should equal '+(S0-K*Math.exp(-.05*T)).toFixed(3));
+$('foot').textContent='Computed by gbm_server.c in '+D.ms+' ms · '+N+' paths × 120 steps · index.html only draws'}
+function draw(p){dMain(p);dHist(p);dConv(p)}
+function play(){cancelAnimationFrame(raf);t0=performance.now();const f=t=>{const q=anim?Math.min(1,(t-t0)/3000):1;draw(1-Math.pow(1-q,3));if(q<1)raf=requestAnimationFrame(f)};f(t0)}
+async function load(a){anim=a;if(busy){again=true;return}busy=true;
+mu=+$('mu').value/100;sg=+$('sg').value/100;T=+$('T').value;N=+$('N').value;K=+$('K').value;
+$('vmu').textContent=(mu*100).toFixed(0)+'%';$('vsg').textContent=(sg*100).toFixed(0)+'%';$('vT').textContent=T+' y';$('vN').textContent=N;$('vK').textContent=K;
+if(a)sd=1+Math.floor(Math.random()*1e9);
+try{const r=await fetch(`/api/sim?mu=${mu}&sg=${sg}&T=${T}&N=${N}&K=${K}&seed=${sd}`);D=await r.json();$('chip').className='chip on';$('chipt').textContent='C engine connected · '+D.ms+' ms';cards();play()}
+catch(e){$('chip').className='chip';$('chipt').textContent='C engine not reachable. Is gbmserver running?'}
+busy=false;if(again){again=false;load(false)}}
+['mu','sg','T','N','K'].forEach(i=>$(i).addEventListener('input',()=>load(false)));
+$('go').onclick=()=>load(true);addEventListener('resize',()=>D&&draw(1));load(true);
+</script></body></html>
